@@ -1,0 +1,160 @@
+
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Bazi Iran Bastan - Online</title>
+<style>
+body{font-family:Tahoma, sans-serif;background:#eef;direction:rtl}
+.container{max-width:1200px;margin:8px auto}
+.card{background:#fff;padding:12px;border:1px solid #ccc;margin-bottom:10px}
+#map{width:1000px;height:600px;border:2px solid #333;background:#dfeffd;margin:0 auto;position:relative}
+.territory{position:absolute;padding:6px;border-radius:6px;border:2px solid #222;cursor:pointer}
+.node{position:absolute;width:24px;height:24px;border-radius:50%}
+#chat{height:240px;overflow:auto;border:1px solid #ccc;padding:6px;background:#fff}
+</style>
+</head>
+<body>
+<div class="container">
+  <div id="auth" class="card">
+    <h3>ورود / ثبت‌نام</h3>
+    <input id="username" placeholder="username">
+    <input id="password" placeholder="password" type="password">
+    <button id="btnRegister">Register</button>
+    <button id="btnLogin">Login</button>
+    <div id="authMsg"></div>
+  </div>
+
+  <div id="lobby" class="card" style="display:none">
+    <h3>Lobby</h3>
+    <button id="btnCreateRoom">Create Room</button>
+    <input id="roomIdInput" placeholder="Room ID to join">
+    <button id="btnJoinRoom">Join Room</button>
+    <div id="roomsList"></div>
+  </div>
+
+  <div id="roomArea" class="card" style="display:none">
+    <h3>Room <span id="rid"></span> - <span id="rstate"></span></h3>
+    <div><button id="btnStart">Start Game (owner only)</button> <button id="btnStop">Stop Game</button></div>
+    <div id="roomInfo"></div>
+    <div id="map"></div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <div style="flex:1">
+        <h4>Actions</h4>
+        <button id="btnGather">Send to Node</button>
+        <button id="btnMarch">March (Attack)</button>
+        <button id="btnSpy">Send Spy</button>
+        <button id="btnUpgrade">Upgrade Unit</button>
+      </div>
+      <div style="width:360px">
+        <h4>Chat</h4>
+        <div id="chat"></div>
+        <input id="chatTxt" placeholder="message"><button id="btnSend">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const api = {
+  register: (u,p)=>fetch('/api/register',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:u,password:p})}).then(r=>r.json()),
+  login: (u,p)=>fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:u,password:p})}).then(r=>r.json())
+};
+
+let socket = null;
+let me = null;
+let currentRoom = null;
+
+document.getElementById('btnRegister').onclick = async ()=>{
+  const u=document.getElementById('username').value.trim();
+  const p=document.getElementById('password').value;
+  if(!u||!p) return alert('enter');
+  const res = await api.register(u,p);
+  if(res.ok){ document.getElementById('authMsg').innerText='Registered. Now login.'; } else { document.getElementById('authMsg').innerText = JSON.stringify(res); }
+};
+
+document.getElementById('btnLogin').onclick = async ()=>{
+  const u=document.getElementById('username').value.trim();
+  const p=document.getElementById('password').value;
+  if(!u||!p) return alert('enter');
+  const res = await api.login(u,p);
+  if(res.ok){ document.getElementById('auth').style.display='none'; document.getElementById('lobby').style.display='block'; me = u; initSocket(); } else { document.getElementById('authMsg').innerText = JSON.stringify(res); }
+};
+
+function initSocket(){
+  socket = io();
+  socket.on('connect', ()=>console.log('connected', socket.id));
+  socket.on('roomCreated', d=>{ joinRoomLocal(d.roomId); });
+  socket.on('joinResult', d=>{ if(d.error) alert(d.error); else joinRoomLocal(d.roomId); });
+  socket.on('roomUpdate', r=>{ currentRoom = r; renderRoom(r); });
+  socket.on('gameStarted', gs=>{ document.getElementById('rstate').innerText='running'; renderGameState(gs); });
+  socket.on('state', gs=>{ renderGameState(gs); });
+  socket.on('chat', m=>{ const ch=document.getElementById('chat'); const div=document.createElement('div'); div.innerText = `[${new Date(m.ts).toLocaleTimeString()}] ${m.from}: ${m.text}`; ch.prepend(div); });
+  socket.on('msg', m=>alert(m));
+}
+
+document.getElementById('btnCreateRoom').onclick = ()=>{ socket.emit('createRoom', {username: me}); };
+document.getElementById('btnJoinRoom').onclick = ()=>{ const rid = document.getElementById('roomIdInput').value.trim().toUpperCase(); if(!rid) return; socket.emit('joinRoom', {username: me, roomId: rid}); };
+
+function joinRoomLocal(rid){
+  document.getElementById('lobby').style.display='none';
+  document.getElementById('roomArea').style.display='block';
+  document.getElementById('rid').innerText = rid;
+}
+
+document.getElementById('btnStart').onclick = ()=>{ const rid = document.getElementById('rid').innerText; socket.emit('startGame', {roomId: rid, username: me}); };
+document.getElementById('btnStop').onclick = ()=>{ const rid = document.getElementById('rid').innerText; socket.emit('stopGame', {roomId: rid, username: me}); };
+
+function renderRoom(r){
+  document.getElementById('roomInfo').innerText = JSON.stringify(r, null, 2);
+  const map = document.getElementById('map'); map.innerHTML='';
+  const positions = {"کاسپی":[60,60,240,220],"ایلام":[300,60,480,220],"کاسی":[700,50,920,220],"عیلام":[520,40,700,220],"پارس":[560,260,740,380],"پارت":[760,360,900,480],"ماد":[400,360,560,520]};
+  Object.keys(positions).forEach(name=>{
+    const pos = positions[name];
+    const el = document.createElement('div'); el.className='territory'; el.style.left=pos[0]+'px'; el.style.top=pos[1]+'px'; el.style.width=(pos[2]-pos[0])+'px'; el.style.height=(pos[3]-pos[1])+'px';
+    el.innerText = name;
+    map.appendChild(el);
+  });
+  if(r.gameState && r.gameState.nodes){
+    r.gameState.nodes.forEach((n,i)=>{
+      const e = document.createElement('div'); e.className='node'; e.style.left=(100 + (i*120))+'px'; e.style.top=(50 + (i*40))+'px'; e.style.background='#7f7'; e.title = n.type; map.appendChild(e);
+    });
+  }
+}
+
+function renderGameState(gs){ console.log('game state', gs); document.getElementById('roomInfo').innerText = JSON.stringify(currentRoom, null, 2); }
+
+document.getElementById('btnGather').onclick = ()=>{
+  const rid = document.getElementById('rid').innerText;
+  const nodeId = prompt('node id (node1..):');
+  const units = parseInt(prompt('units to send:'),10) || 1;
+  socket.emit('action', {roomId: rid, username: me, action:'gather', params:{nodeId, units}});
+};
+document.getElementById('btnMarch').onclick = ()=>{
+  const rid = document.getElementById('rid').innerText;
+  const target = prompt('target player name:');
+  const units = parseInt(prompt('units:'),10) || 1;
+  socket.emit('action', {roomId: rid, username: me, action:'march', params:{targetUsername: target, units}});
+};
+document.getElementById('btnSpy').onclick = ()=>{
+  const rid = document.getElementById('rid').innerText;
+  const target = prompt('target player name:');
+  socket.emit('action', {roomId: rid, username: me, action:'spy', params:{targetUsername: target}});
+};
+document.getElementById('btnUpgrade').onclick = ()=>{
+  const rid = document.getElementById('rid').innerText;
+  const unit = prompt('unit: soldier/cavalry/archer');
+  socket.emit('action', {roomId: rid, username: me, action:'upgrade', params:{username: me, unit}});
+};
+
+document.getElementById('btnSend').onclick = ()=>{
+  const rid = document.getElementById('rid').innerText;
+  const txt = document.getElementById('chatTxt').value.trim();
+  if(!txt) return;
+  socket.emit('chat', {roomId: rid, username: me, channel:'global', text: txt});
+  document.getElementById('chatTxt').value='';
+};
+</script>
+</body>
+</html>
